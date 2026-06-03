@@ -53,7 +53,7 @@
 ### ۱. کلون کردن پروژه
 
 ```bash
-git clone https://github.com/USERNAME/REPO_NAME.git
+git clone https://github.com/imhamiddev/telegram-to-rubika.git
 cd REPO_NAME
 ```
 
