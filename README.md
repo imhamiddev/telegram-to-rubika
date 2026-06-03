@@ -119,47 +119,6 @@ nohup python main.py > bot.log 2>&1 &
 
 ---
 
-## 🔐 امنیت
-
-> ⚠️ **هرگز** این فایل‌ها رو در ریپو آپلود نکن:
-> - `*.session`
-> - `*.session-journal`
-> - `*.rp`
-> - `*.db`
-> - `.env`
-
-فایل `.gitignore` پروژه باید شامل این‌ها باشه (پایین‌تر آمده).
-
----
-
-## 📋 فایل `.gitignore` پیشنهادی
-
-```gitignore
-# Session files
-*.session
-*.session-journal
-*.rp
-
-# Environment
-.env
-
-# Database
-*.db
-
-# Downloads
-downloads/
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-
-# Logs
-*.log
-```
-
----
-
 ## 📦 وابستگی‌ها
 
 | کتابخونه | کاربرد |
