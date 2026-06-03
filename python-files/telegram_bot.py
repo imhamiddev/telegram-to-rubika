@@ -167,8 +167,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "به ربات انتقال فایل خوش اومدی 🚀\n\n"
         "📌 فایلت رو بفرست تا دانلود و به روبیکا ارسال بشه.\n"
         "⬇️ از دکمه‌های پایین هم می‌تونی استفاده کنی:",
+        reply_markup=MAIN_REPLY_KEYBOARD,
+    )
+    await update.message.reply_text(
+        "Developed by:",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("ساخته شده توسط حمید", url="https://t.me/imhamiddev", style="success")]
+            [InlineKeyboardButton("Hamid", url="https://t.me/imhamiddev", style="success")]
         ])
     )
 
