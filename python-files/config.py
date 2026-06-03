@@ -4,7 +4,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
-FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "Q1w2e3r4t512345")
+FIXED_PASSWORD = os.getenv("FIXED_PASSWORD", "")
 
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
