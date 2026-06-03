@@ -77,7 +77,7 @@ FIXED_PASSWORD= رمز ثابت برای فایل های زیپ
 ```
 
 > برای گرفتن `ALLOWED_USER_ID` پیام بده به [@userinfobot](https://t.me/userinfobot)
-
+اگر نتونستید api - hash رو دریافت کنید در تلگرام پیام بدین براتون بفرستم @imhamiddev
 ### ۴. تنظیم مسیر دانلود
 
 در فایل `config.py` این خط رو پیدا کن و مسیر رو عوض کن:
