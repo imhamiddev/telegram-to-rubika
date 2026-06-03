@@ -68,11 +68,12 @@ pip install pyrogram tgcrypto python-telegram-bot rubpy python-dotenv jdatetime 
 یه فایل `.env` در ریشه پروژه بساز:
 
 ```env
-TELEGRAM_TOKEN=توکن_ربات_از_BotFather
-TELEGRAM_API_ID=عدد_از_my.telegram.org
-TELEGRAM_API_HASH=هش_از_my.telegram.org
-TELEGRAM_PHONE=شماره_با_کد_کشور_مثلا_989123456789
-ALLOWED_USER_ID=آیدی_عددی_تلگرامت
+TELEGRAM_TOKEN= توکن ربات 
+TELEGRAM_API_ID= باید از my.telegram.org بگیرید
+TELEGRAM_API_HASH= باید از my.telegram.org بگیرید
+TELEGRAM_PHONE= 989185553322
+ALLOWED_USER_ID= آیدی عدد تلگرام
+FIXED_PASSWORD= رمز ثابت برای فایل های زیپ
 ```
 
 > برای گرفتن `ALLOWED_USER_ID` پیام بده به [@userinfobot](https://t.me/userinfobot)
