@@ -4,14 +4,15 @@ import glob
 import math
 import asyncio
 import time
+import logging
 import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, CommandHandler
 )
-from config import TELEGRAM_TOKEN, DOWNLOAD_DIR, MAX_SIZE_MB, FIXED_PASSWORD, ALLOWED_USER_ID
-from rubika_bot import random_filename, cleanup, PART_SIZE_MB
+from config import TELEGRAM_TOKEN, DOWNLOAD_DIR, MAX_SIZE_MB, ALLOWED_USER_ID
+from rubika_bot import random_filename, cleanup, PART_SIZE_MB, generate_password
 from rubpy import Client
 import jdatetime
 from downloader import (
@@ -22,16 +23,45 @@ from downloader import (
 )
 from stats import log_download, log_send, log_archive, format_stats_text  # ← آمار
 
+logger = logging.getLogger(__name__)
+
 RUBIKA_SESSION          = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'my_session')
 LARGE_FILE_THRESHOLD_MB = 20
 SPLIT_THRESHOLD_MB      = 100
 FORWARD_COLLECT_SECONDS = 5
 MAX_AUTO_RETRY          = 15
 
+GENERIC_ERROR_MSG = "❌ یه خطا پیش اومد. لطفاً دوباره امتحان کن."
+
+
+def safe_error_text(prefix: str, exc: Exception) -> str:
+    """
+    پیام خطا رو لاگ می‌کنه (با جزئیات کامل) ولی به کاربر فقط یه پیام
+    عمومی نشون می‌ده تا مسیر فایل/جزئیات داخلی سرور لو نره.
+    """
+    logger.exception(prefix)
+    return f"{prefix}\n{GENERIC_ERROR_MSG}"
+
 _sessions       = {}
 _forward_timers = {}
 _link_sessions  = {}
 _cancel_flags   = {}
+
+
+def is_allowed(user_id: int) -> bool:
+    """
+    فقط ALLOWED_USER_ID اجازه‌ی استفاده از ربات رو داره.
+    اگه ALLOWED_USER_ID تنظیم نشده باشه (۰)، به‌صورت پیش‌فرض دسترسی رد میشه
+    تا ربات به‌اشتباه برای همه باز نمونه.
+    """
+    return bool(ALLOWED_USER_ID) and user_id == ALLOWED_USER_ID
+
+
+async def deny_access(update: Update):
+    try:
+        await update.effective_message.reply_text("❌ دسترسی ندارید.")
+    except Exception:
+        pass
 
 
 def smart_delay(file_size_mb: float) -> int:
@@ -161,6 +191,9 @@ async def react(message, emoji: str, big: bool = False):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.message.from_user.id):
+        await deny_access(update)
+        return
     first = update.message.from_user.first_name or "کاربر"
     await update.message.reply_text(
         f"👋 سلام {first}!\n\n"
@@ -178,6 +211,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.message.from_user.id):
+        await deny_access(update)
+        return
     uid    = str(update.message.from_user.id)
     active = len(_sessions)
     disk_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*"))
@@ -202,6 +238,9 @@ async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def ask_for_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.message.from_user.id):
+        await deny_access(update)
+        return
     uid = str(update.message.from_user.id)
     _link_sessions[uid] = {"waiting": True}
     await update.message.reply_text(
@@ -220,7 +259,7 @@ async def handle_link_download(uid, url, message, context):
         try:
             save_path = await download_direct_link(uid, url)
         except Exception as e:
-            await status_msg.edit_text(f"❌ خطا:\n{e}")
+            await status_msg.edit_text(safe_error_text("❌ دانلود لینک ناموفق بود.", e))
             return
         filename = os.path.basename(save_path)
         file_mb  = os.path.getsize(save_path) / (1024*1024)
@@ -241,6 +280,7 @@ async def handle_link_download(uid, url, message, context):
     try:
         info = await get_video_info(url)
     except Exception as e:
+        logger.warning(f"get_video_info failed for url={url!r}: {e}")
         await status_msg.edit_text(f"❌ ویدیویی پیدا نشد:\n{e}")
         return
 
@@ -278,13 +318,12 @@ async def handle_ytdlp_quality_callback(uid, format_id, query):
         except Exception: pass
     await query.edit_message_text("⬇️ دانلود شروع شد...")
     try:
-        audio_only = format_id.startswith("bestaudio") or "kbps" in session.get("ytdlp_formats", [{}])[0].get("label", "")
-        # پیدا کردن نوع فرمت انتخاب‌شده
-        selected = next((f for f in session.get("ytdlp_formats", []) if f["format_id"] == format_id), {})
+        # پیدا کردن نوع فرمت انتخاب‌شده (ویدیو یا صوت)
+        selected   = next((f for f in session.get("ytdlp_formats", []) if f["format_id"] == format_id), {})
         audio_only = selected.get("type") == "audio"
-        save_path = await download_video_from_page(uid, url, format_id, progress_update, audio_only=audio_only)
+        save_path  = await download_video_from_page(uid, url, format_id, progress_update, audio_only=audio_only)
     except Exception as e:
-        await query.edit_message_text(f"❌ خطا:\n{e}")
+        await query.edit_message_text(safe_error_text("❌ دانلود ویدیو ناموفق بود.", e))
         _link_sessions.pop(uid, None)
         return
     _link_sessions.pop(uid, None)
@@ -399,8 +438,8 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     uid     = str(message.from_user.id)
 
-    if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
-        await message.reply_text("❌ دسترسی ندارید.")
+    if not is_allowed(message.from_user.id):
+        await deny_access(update)
         return
 
     file, original_filename = get_file_info(message)
@@ -470,7 +509,9 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 except Exception as e:
                     await react(msg, "❌", big=False)
-                    await status_msg.edit_text(f"❌ خطا در دانلود {short_name(fname)}: {e}")
+                    await status_msg.edit_text(
+                        safe_error_text(f"❌ خطا در دانلود {short_name(fname)}.", e)
+                    )
                     cleanup_session(uid)
                     return
 
@@ -506,7 +547,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     except Exception as e:
         await react(message, "❌", big=False)
-        await status_msg.edit_text(f"❌ خطا در دانلود: {e}")
+        await status_msg.edit_text(safe_error_text("❌ خطا در دانلود.", e))
         return
 
     await react(message, "✅", big=False)
@@ -527,14 +568,18 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
     session   = _sessions[uid]
     _cancel_flags[uid] = False
 
-    if "password"   not in session: session["password"]   = FIXED_PASSWORD if safe_mode else None
+    if "password"   not in session: session["password"]   = generate_password() if safe_mode else None
     if "caption"    not in session: session["caption"]    = get_shamsi()
     if "start_from" not in session: session["start_from"] = 0
     if "retries"    not in session: session["retries"]    = {}
 
     password   = session["password"]
     caption    = session["caption"]
-    if safe_mode:   mode_label = "🛡 Safe+رمز"
+    if safe_mode:
+        # پسورد رندوم فقط داخل همین session ساخته میشه و در کپشن اولین پارت
+        # فقط برای خود کاربر (چت "me" در روبیکا) نمایش داده میشه.
+        caption    = f"{caption}\n🔑 رمز فایل: {password}"
+        mode_label = "🛡 Safe+رمز"
     elif zip_only:  mode_label = "🗜 زیپ"
     else:           mode_label = "📎 معمولی"
 
@@ -728,11 +773,12 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
             pass
 
     except Exception as e:
+        logger.exception("خطا در فرآیند ارسال فایل به روبیکا")
         sent  = session.get("start_from", 0)
         total = len(session.get("part_files", all_paths))
         try:
             await query.edit_message_text(
-                f"❌ خطا:\n{e}\n\n"
+                f"❌ ارسال با خطا مواجه شد.\n\n"
                 f"✅ {sent} از {total} {'پارت' if safe_mode else 'فایل'} ارسال شده\n\n"
                 f"برای ادامه دوباره دکمه ارسال رو بزن:",
                 reply_markup=send_keyboard(uid)
@@ -742,6 +788,9 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.message.from_user.id):
+        await deny_access(update)
+        return
     text = update.message.text.strip()
     uid  = str(update.message.from_user.id)
 
@@ -769,6 +818,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if not is_allowed(query.from_user.id):
+        try:
+            await query.edit_message_text("❌ دسترسی ندارید.")
+        except Exception:
+            pass
+        return
+
     data  = query.data
 
     if data.startswith("ytdlp:"):
@@ -839,5 +896,5 @@ def run_telegram_bot():
     ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    print("🤖 ربات تلگرام شروع به کار کرد...")
+    logger.info("🤖 ربات تلگرام شروع به کار کرد...")
     app.run_polling()

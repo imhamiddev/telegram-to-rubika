@@ -1,7 +1,10 @@
 import os
+import logging
 from pyrogram import Client as PyroClient
 from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_TOKEN, DOWNLOAD_DIR
 from rubika_bot import random_filename
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_PATH = os.path.join(BASE_DIR, "tg_bot_session")
@@ -43,7 +46,7 @@ async def download_large_file(message, original_filename, progress_callback=None
     chat_id = message.chat.id
     msg_id = message.message_id
 
-    print(f"[DEBUG] chat_id={chat_id}, msg_id={msg_id}")
+    logger.debug(f"در حال دریافت پیام از pyrogram: chat_id={chat_id}, msg_id={msg_id}")
 
     pyro_msg = await client.get_messages(chat_id, msg_id)
 
