@@ -24,7 +24,7 @@
 
 ```
 .
-├── main.py            # نقطه شروع برنامه
+├── main.py            # نقطه شروع برنامه + تنظیم logging
 ├── config.py          # خواندن تنظیمات از .env
 ├── telegram_bot.py    # منطق اصلی ربات تلگرام
 ├── tg_client.py       # کلاینت Pyrogram برای دانلود فایل‌های بزرگ
@@ -33,6 +33,8 @@
 ├── rubika_bot.py      # ارسال فایل به روبیکا
 ├── downloader.py      # دانلود از لینک (yt-dlp + مستقیم)
 ├── stats.py           # ثبت و نمایش آمار
+├── requirements.txt   # وابستگی‌های پایتون
+├── .env.example       # نمونه فایل تنظیمات محیطی
 └── passenger_wsgi.py  # فایل WSGI برای هاست‌های cPanel
 ```
 
@@ -54,28 +56,34 @@
 
 ```bash
 git clone https://github.com/imhamiddev/telegram-to-rubika.git
-cd REPO_NAME
+cd telegram-to-rubika/python-files
 ```
 
 ### ۲. نصب کتابخونه‌ها
 
 ```bash
-pip install pyrogram tgcrypto python-telegram-bot rubpy python-dotenv jdatetime pyzipper yt-dlp
+pip install -r requirements.txt
 ```
 
 ### ۳. ساخت فایل `.env`
 
-یه فایل `.env` در ریشه پروژه بساز:
+فایل `.env.example` رو کپی کن و مقادیر واقعی رو جایگزین کن:
+
+```bash
+cp .env.example .env
+```
 
 ```env
 TELEGRAM_TOKEN= توکن ربات 
-TELEGRAM_API_ID= باید از my.telegram.org بگیرید
+ت TELEGRAM_API_ID= باید از my.telegram.org بگیرید
 TELEGRAM_API_HASH= باید از my.telegram.org بگیرید
 TELEGRAM_PHONE= 989185553322
 ALLOWED_USER_ID= آیدی عدد تلگرام
-FIXED_PASSWORD= رمز ثابت برای فایل های زیپ
 ```
 
+> ⚠️ فایل `.env` هرگز نباید commit بشه (در `.gitignore` هست). رمز فایل‌های زیپ دیگه ثابت نیست،
+> هر بار به‌صورت خودکار و امن ساخته می‌شه و داخل کپشن همون فایل روی روبیکا به شما نمایش داده می‌شه.
+>
 > برای گرفتن `ALLOWED_USER_ID` پیام بده به [@userinfobot](https://t.me/userinfobot)
 > اگرر نتونستید api - hash رو دریافت کنید در تلگرام پیام بدین براتون بفرستم @imhamiddev
 ### ۴. تنظیم مسیر دانلود
@@ -147,6 +155,14 @@ nohup python main.py > bot.log 2>&1 &
 
 ## 📄 لایسنس
 
-این پروژه برای استفاده شخصی است.
+این پروژه تحت [لایسنس MIT](./LICENSE) منتشر شده — استفاده، تغییر و توزیع آزاد است.
+
+## ⚠️ نکات امنیتی
+
+- فایل `.env` و session‌ها (`*.session`) هرگز نباید commit بشن.
+- فقط `ALLOWED_USER_ID` تنظیم‌شده اجازه‌ی استفاده از ربات رو داره؛ اگه این مقدار خالی
+  بمونه، ربات به‌صورت پیش‌فرض دسترسی همه رو رد می‌کنه (fail-closed).
+- رمز فایل‌های زیپ به‌صورت رندوم و امن تولید می‌شه و فقط داخل کپشن همون فایل روی روبیکا
+  (که فقط شما می‌بینید) نمایش داده می‌شه.
 
 </div>
