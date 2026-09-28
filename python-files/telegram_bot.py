@@ -22,6 +22,7 @@ from downloader import (
     is_direct_link,
 )
 from stats import log_download, log_send, log_archive, format_stats_text  # ← آمار
+import session_store
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,18 @@ _sessions       = {}
 _forward_timers = {}
 _link_sessions  = {}
 _cancel_flags   = {}
+
+
+def _persist_sessions():
+    """
+    وضعیت فعلی همه‌ی session‌ها رو روی دیسک ذخیره می‌کنه (فقط متادیتای
+    قابل‌serialize؛ به session_store.py مراجعه کن). این تابع باید بعد از هر
+    تغییری در _sessions که می‌خوایم در برابر ری‌استارت دووم بیاره صدا زده
+    بشه: اضافه/حذف شدن فایل، شروع ارسال، پیشرفت ارسال (start_from)، و غیره.
+    نوشتن روی دیسک ارزون و سریعه (JSON کوچیک)، پس صدا زدنش بعد از هر تغییر
+    مشکلی از نظر کارایی ایجاد نمی‌کنه.
+    """
+    session_store.save_all(_sessions)
 
 
 def is_allowed(user_id: int) -> bool:
@@ -148,11 +161,47 @@ def cleanup_session(uid):
     if uid in _forward_timers:
         _forward_timers[uid].cancel()
         _forward_timers.pop(uid, None)
+    _persist_sessions()
 
 
-SEVENZIP_BIN = os.path.expanduser("~/.local/bin/7za")
+import shutil
+
+_SEVENZIP_CANDIDATES = [
+    os.getenv("SEVENZIP_BIN", ""),
+    os.path.expanduser("~/.local/bin/7za"),
+    "/usr/local/bin/7za",
+    "/usr/bin/7za",
+    "7za",   # جستجو در PATH
+    "7z",    # بعضی توزیع‌ها فقط 7z دارن نه 7za
+]
+
+def find_sevenzip_bin():
+    """
+    مسیر باینری 7za/7z رو پیدا می‌کنه: اول SEVENZIP_BIN از .env، بعد چند مسیر
+    رایج نصب، و در نهایت جستجو در PATH سیستم. اگه هیچ‌کدوم پیدا نشه None
+    برمی‌گردونه تا با یه پیام خطای واضح به کاربر گفته بشه (به‌جای کرش خام).
+    """
+    for candidate in _SEVENZIP_CANDIDATES:
+        if not candidate:
+            continue
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        else:
+            found = shutil.which(candidate)
+            if found:
+                return found
+    return None
+
+SEVENZIP_BIN = find_sevenzip_bin()
 
 def create_7z(output_base, password, part_size_mb, *file_paths):
+    if not SEVENZIP_BIN:
+        raise Exception(
+            "ابزار 7za/7z روی سرور پیدا نشد. یا آن را نصب کن (مثلاً: apt install p7zip-full) "
+            "یا مسیرش رو در متغیر SEVENZIP_BIN در فایل .env مشخص کن."
+        )
+
     existing = glob.glob(output_base + ".7z*")
     for f in existing:
         try: os.remove(f)
@@ -268,6 +317,7 @@ async def handle_link_download(uid, url, message, context):
             _sessions[uid] = {"files": [], "waiting": False}
         _sessions[uid]["files"].append({"path": save_path, "name": filename})
         files = _sessions[uid]["files"]
+        _persist_sessions()
         names, total_size, _ = files_summary(files)
         await status_msg.edit_text(
             f"✅ دانلود شد ({file_mb:.1f}MB)\n\n"
@@ -334,6 +384,7 @@ async def handle_ytdlp_quality_callback(uid, format_id, query):
         _sessions[uid] = {"files": [], "waiting": False}
     _sessions[uid]["files"].append({"path": save_path, "name": real_name})
     files = _sessions[uid]["files"]
+    _persist_sessions()
     names, total_size, _ = files_summary(files)
     await query.edit_message_text(
         f"✅ ویدیو دانلود شد ({file_mb:.1f}MB)\n\n"
@@ -453,7 +504,15 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _sessions[uid].get("collecting_forwards"):
             _sessions[uid]["pending_forwards"].append(message)
             return
-        await message.reply_text("⚠️ اول روی دکمه‌های پیام قبلی کلیک کن.")
+        # این فایل نادیده گرفته می‌شه چون یک session باز دیگه (مثلاً در حال
+        # ارسال به روبیکا یا منتظر انتخاب "زیپ/معمولی/زیپ+رمز") وجود داره.
+        # به کاربر صریح می‌گیم فایل ذخیره نشده تا دوباره بعداً بفرستش، نه
+        # این‌که فکر کنه فایلش در صف افتاده.
+        await message.reply_text(
+            "⚠️ یک عملیات دیگه در حال انجامه (مثلاً ارسال به روبیکا یا انتخاب حالت ارسال).\n"
+            "این فایل ذخیره نشد — لطفاً منتظر بمون تا عملیات فعلی تموم بشه یا لغوش کن، "
+            "بعد دوباره همین فایل رو بفرست."
+        )
         return
 
     file_size_mb = (file.file_size or 0) / (1024*1024)
@@ -502,6 +561,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         entry = {"path": save_path, "name": fname}
                         _sessions[uid]["files"].append(entry)
                         downloaded_so_far.append(entry)
+                        # ثبت پیشرفت بعد از هر فایل، نه فقط در پایان حلقه؛
+                        # اگه در میانه‌ی دانلود ۱۰ فایل کرش کنیم، فایل‌های
+                        # قبلاً دانلودشده از دست نمی‌رن.
+                        _persist_sessions()
                         await react(msg, "✅", big=False)
                 except asyncio.CancelledError:
                     await status_msg.edit_text("❌ لغو شد. فایل‌های دانلود‌شده پاک شدن.")
@@ -518,9 +581,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files = _sessions[uid]["files"]
             if not files:
                 del _sessions[uid]
+                _persist_sessions()
                 return
 
             names, total_size, _ = files_summary(files)
+            _persist_sessions()
             await status_msg.edit_text(
                 f"✅ {len(files)} فایل دانلود شد ({total_size})\n\n"
                 f"📦 فایل‌ها:\n{names}\n\nفایل دیگه‌ای هم داری؟",
@@ -553,6 +618,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await react(message, "✅", big=False)
     _sessions[uid]["files"].append({"path": save_path, "name": original_filename})
     _sessions[uid]["waiting"] = False
+    _persist_sessions()
 
     files = _sessions[uid]["files"]
     names, total_size, _ = files_summary(files)
@@ -675,6 +741,9 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
                         session["retries"][i] = 0
                         cleanup(part_path)
                         i += 1
+                        # ثبت پیشرفت روی دیسک: در صورت کرش، پارت‌های قبلاً
+                        # ارسال‌شده دوباره فرستاده نمی‌شن.
+                        _persist_sessions()
 
                         if i <= total_parts:
                             next_size = os.path.getsize(part_files[i-1])/(1024*1024) if os.path.exists(part_files[i-1]) else 50
@@ -694,6 +763,11 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
                         retry_count += 1
                         session["retries"][i] = retry_count
                         if retry_count >= MAX_AUTO_RETRY:
+                            # شمارنده رو صفر می‌کنیم تا اگه کاربر دوباره روی
+                            # دکمه‌ی ارسال بزنه، این پارت از صفر retry شروع
+                            # بشه؛ وگرنه چون شمارنده روی MAX_AUTO_RETRY
+                            # می‌مونه، همون تلاش اول بعدی فوراً fail می‌شد.
+                            session["retries"][i] = 0
                             raise Exception(
                                 f"پارت {i} بعد از {retry_count} بار تلاش ناموفق بود:\n{e}"
                             )
@@ -725,6 +799,9 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
                         session["retries"][i] = 0
                         cleanup(path)
                         i += 1
+                        # ثبت پیشرفت روی دیسک: اگه ربات درست همین‌جا کرش
+                        # کنه، دفعه‌ی بعد از فایل بعدی ادامه می‌ده نه از اول.
+                        _persist_sessions()
 
                         if i <= len(files):
                             delay = smart_delay(file_mb)
@@ -743,6 +820,10 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
                         retry_count += 1
                         session["retries"][i] = retry_count
                         if retry_count >= MAX_AUTO_RETRY:
+                            # مثل حلقه‌ی پارت‌ها: صفر کردن شمارنده تا تلاش
+                            # بعدی کاربر از صفر شروع بشه، نه این‌که فوراً به
+                            # سقف retry برخورد کنه.
+                            session["retries"][i] = 0
                             raise Exception(
                                 f"فایل {i} بعد از {retry_count} بار تلاش ناموفق:\n{e}"
                             )
@@ -756,6 +837,7 @@ async def do_send(uid, safe_mode, query, files, total_size, zip_only=False):
 
         del _sessions[uid]
         _cancel_flags.pop(uid, None)
+        _persist_sessions()
         if safe_mode or zip_only:
             parts_count = len(session.get("part_files", []))
             await query.edit_message_text(
@@ -861,6 +943,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "more":
         _sessions[uid]["waiting"] = True
+        _persist_sessions()
         await query.edit_message_text(
             f"👌 فایل بعدی رو بفرست.\n\n"
             f"📦 دانلود شده ({len(files)} فایل — {total_size}):\n{names}"
@@ -886,8 +969,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def _on_startup(app):
+    """
+    بعد از initialize شدن اپ و قبل از شروع polling صدا زده می‌شه (الگوی
+    رسمی post_init در python-telegram-bot). session‌های ذخیره‌شده از اجرای
+    قبلی رو بازیابی می‌کنه (فقط اونایی که فایل‌هاشون هنوز واقعاً روی دیسک
+    هستن) و اگه چیزی برای بازیابی بود، به کاربر مجاز اطلاع می‌ده که کار
+    قبلیش از دست نرفته.
+    """
+    recovered = session_store.recover_sessions()
+    if not recovered:
+        return
+    _sessions.update(recovered)
+    logger.info(f"{len(recovered)} session از اجرای قبلی بازیابی شد.")
+    if not ALLOWED_USER_ID:
+        return
+    try:
+        for uid, session in recovered.items():
+            files = session.get("files", [])
+            names, total_size, _ = files_summary(files) if files else ("", "۰", 0)
+            await app.bot.send_message(
+                chat_id=int(uid),
+                text=(
+                    "🔄 ربات ری‌استارت شد.\n\n"
+                    f"یک session ناتموم پیدا شد با {len(files)} فایل ({total_size}) "
+                    "که هنوز روی دیسک سالم مونده.\n"
+                    "می‌تونی فایل بیشتری بفرستی یا مستقیماً دکمه‌ی ارسال رو بزن؛ "
+                    "فایل‌هایی که قبلاً با موفقیت به روبیکا ارسال شده بودن "
+                    "دوباره فرستاده نمی‌شن."
+                ),
+            )
+    except Exception:
+        logger.exception("اطلاع‌رسانی بازیابی session به کاربر ناموفق بود")
+
+
 def run_telegram_bot():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(_on_startup).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(
         filters.Document.ALL | filters.VIDEO | filters.AUDIO |

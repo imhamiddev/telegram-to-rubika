@@ -7,7 +7,7 @@ import re
 import json
 import asyncio
 import glob
-from config import DOWNLOAD_DIR
+from config import DOWNLOAD_DIR, MAX_SIZE_MB
 
 
 # ─── سایت‌هایی که yt-dlp بهتره ازشون دانلود کنه ───────────────
@@ -40,8 +40,20 @@ def _safe_filename(name: str) -> str:
     return re.sub(r'[^\w.\-]', '_', name)
 
 def _get_domain(url: str) -> str:
-    match = re.search(r'(?:https?://)?(?:www\.)?([^/]+)', url.lower())
-    return match.group(1) if match else ""
+    """
+    دامنه رو با urllib.parse استخراج می‌کنه (به‌جای regex دستی قبلی) تا
+    لینک‌های دارای userinfo (user:pass@host)، پورت (host:8080) یا IPv6
+    درست پارس بشن؛ regex قبلی برای این حالت‌ها یا کل authority (شامل پورت/
+    یوزرنیم) رو به‌عنوان دامنه برمی‌گردوند یا اشتباه match می‌کرد.
+    """
+    from urllib.parse import urlparse
+    u = url.strip().lower()
+    if "://" not in u:
+        u = "http://" + u  # تا urlparse بتونه netloc رو تشخیص بده
+    host = urlparse(u).hostname or ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 def is_direct_link(url: str) -> bool:
     domain = _get_domain(url)
@@ -56,20 +68,56 @@ def is_direct_link(url: str) -> bool:
 
 # ─── دانلود لینک مستقیم (wget) ─────────────────────────────────
 
+async def _kill_if_oversized(proc, save_path: str, max_bytes: int, stop_event: asyncio.Event):
+    """
+    چون گزینه‌های محدودکننده‌ی خود wget (مثل --quota/-Q) طبق مستندات رسمی‌اش
+    برای دانلود یک فایل تکی اثری ندارن (فایل کامل دانلود می‌شه و فقط یک
+    هشدار چاپ می‌شه)، این تابع به‌صورت موازی هر ۲۰۰ میلی‌ثانیه حجم فایل در
+    حال نوشتن رو چک می‌کنه و اگه از سقف مجاز رد بشه، خودمون پروسه‌ی wget رو
+    می‌کشیم؛ این‌طوری از پر شدن دیسک سرور با یک فایل خیلی بزرگ جلوگیری
+    می‌شه، حتی اگه سرور مقصد اصلاً هدر Content-Length هم نده.
+    """
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(0.2)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > max_bytes:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return
+    except asyncio.CancelledError:
+        pass
+
+
 async def download_direct_link(uid: str, url: str) -> str:
     raw_name = url.split("?")[0].split("/")[-1] or f"file_{uid}"
     filename = _safe_filename(raw_name)
     save_path = os.path.join(DOWNLOAD_DIR, f"link_{uid}_{filename}")
+    max_bytes = MAX_SIZE_MB * 1024 * 1024
 
     proc = await asyncio.create_subprocess_exec(
         "wget", "-q", "-O", save_path, url,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await proc.communicate()
 
-    if proc.returncode != 0:
+    stop_event = asyncio.Event()
+    watcher = asyncio.get_event_loop().create_task(
+        _kill_if_oversized(proc, save_path, max_bytes, stop_event)
+    )
+    try:
+        _, stderr = await proc.communicate()
+    finally:
+        stop_event.set()
+        watcher.cancel()
+
+    oversized = os.path.exists(save_path) and os.path.getsize(save_path) > max_bytes
+
+    if proc.returncode != 0 or oversized:
         if os.path.exists(save_path):
             os.remove(save_path)
+        if oversized:
+            raise Exception(f"حجم فایل بیشتر از حد مجاز ({MAX_SIZE_MB}MB) بود؛ دانلود متوقف شد.")
         raise Exception(stderr.decode() if stderr else "خطای نامشخص wget")
 
     return save_path
