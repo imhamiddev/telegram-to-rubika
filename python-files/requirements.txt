@@ -1,0 +1,11 @@
+pyrogram>=2.0,<3.0
+tgcrypto>=1.2,<2.0
+# 22.7 اولین نسخه‌ایه که style دکمه‌ها (primary/success/danger) رو داره
+python-telegram-bot>=22.7,<23.0
+rubpy>=6.0
+python-dotenv>=1.0,<2.0
+jdatetime>=4.1,<5.0
+# [default] شامل yt-dlp-ejs هست که برای یوتیوب لازمه (به‌علاوه‌ی deno یا node)
+yt-dlp[default]>=2025.11.12
+# موتور دوم: عکس/گالری/کاروسل اینستاگرام، توییتر، پینترست، ردیت و ...
+gallery-dl>=1.30

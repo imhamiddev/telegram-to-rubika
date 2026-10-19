@@ -1,0 +1,21 @@
+# Session files
+*.session
+*.session-journal
+*.rp
+
+# Environment
+.env
+
+# Database
+*.db
+
+# Downloads
+downloads/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
